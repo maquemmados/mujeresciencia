@@ -50,3 +50,7 @@ segments/
 # Environment
 .env
 .env.local
+
+# Cookies (should not be committed for security)
+cookies.txt
+*.cookies

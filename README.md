@@ -92,6 +92,7 @@ python segment_youtube_video.py [URL] [OPTIONS]
   - For LUFS: -23.0 LUFS is the EBU R128 broadcast standard
   - For RMS: -20.0 to -23.0 dB is typical
   - For Peak: -1.0 to -3.0 dB is common
+- `--cookies FILE` - Path to cookies.txt file (for bypassing YouTube restrictions)
 - `--keep-audio` - Keep the downloaded audio file after processing
 
 ### Examples
@@ -114,6 +115,11 @@ python segment_youtube_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --
 **With peak normalization:**
 ```bash
 python segment_youtube_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --normalize peak --target-level -3.0
+```
+
+**Using cookies to bypass YouTube restrictions:**
+```bash
+python segment_youtube_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --cookies cookies.txt
 ```
 
 **Use a different model for faster processing:**
@@ -296,9 +302,42 @@ python segment_youtube_video.py "VIDEO_URL" --normalize lufs --target-level -23.
 - The script will continue without speaker detection
 - Segments will still be created without speaker labels
 
-**Issue: Download fails**
+**Issue: HTTP Error 403 (YouTube download blocked)**
+
+This is the most common issue. YouTube actively blocks automated downloads. Try these solutions in order:
+
+1. **Update yt-dlp** (REQUIRED - do this first):
+   ```bash
+   pip install --upgrade yt-dlp
+   ```
+   YouTube changes their API frequently, so keeping yt-dlp updated is essential.
+
+2. **Use browser cookies** (RECOMMENDED):
+
+   This is the most reliable solution. It makes your downloads appear as if they're coming from your logged-in browser session.
+
+   **Step-by-step:**
+   - Install a browser extension to export cookies:
+     - Chrome: [Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid)
+     - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+   - Go to [youtube.com](https://youtube.com) and make sure you're logged in
+   - Click the extension icon and select "Export" or "Download"
+   - Save the file as `cookies.txt` in your working directory
+   - Run the script with the `--cookies` flag:
+     ```bash
+     python segment_youtube_video.py "VIDEO_URL" --cookies cookies.txt
+     ```
+
+3. **Try a different video**: Some videos have stricter access controls than others
+
+4. **Wait and retry**: YouTube may be rate-limiting your IP address. Wait 10-15 minutes and try again
+
+5. **Check video accessibility**: Ensure the video is publicly accessible and not region-restricted
+
+**Issue: Other download errors**
 - Check that the YouTube URL is valid and accessible
-- Some videos may have restrictions
+- Verify your internet connection is stable
+- Some videos may have copyright or regional restrictions
 
 ## License
 

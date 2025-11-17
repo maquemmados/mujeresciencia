@@ -22,13 +22,14 @@ import pyloudnorm as pyln
 from tqdm import tqdm
 
 
-def download_youtube_video(url: str, output_dir: str = "downloads") -> str:
+def download_youtube_video(url: str, output_dir: str = "downloads", cookies_file: str = None) -> str:
     """
     Download YouTube video and extract audio.
 
     Args:
         url: YouTube video URL
         output_dir: Directory to save the downloaded audio
+        cookies_file: Path to cookies file (for bypassing restrictions)
 
     Returns:
         Path to the downloaded audio file
@@ -46,15 +47,54 @@ def download_youtube_video(url: str, output_dir: str = "downloads") -> str:
         }],
         'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
         'quiet': False,
+        # Options to help avoid 403 errors
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+            }
+        },
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        video_id = info['id']
-        audio_path = os.path.join(output_dir, f"{video_id}.wav")
+    # Add cookies if provided
+    if cookies_file:
+        if not os.path.exists(cookies_file):
+            print(f"Warning: Cookies file not found: {cookies_file}")
+        else:
+            ydl_opts['cookiefile'] = cookies_file
+            print(f"Using cookies from: {cookies_file}")
 
-    print(f"✓ Audio downloaded: {audio_path}")
-    return audio_path
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_id = info['id']
+            audio_path = os.path.join(output_dir, f"{video_id}.wav")
+
+        print(f"✓ Audio downloaded: {audio_path}")
+        return audio_path
+
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        if "403" in error_msg or "Forbidden" in error_msg:
+            print("\n" + "="*70)
+            print("ERROR: YouTube blocked the download (HTTP 403 Forbidden)")
+            print("="*70)
+            print("\nThis usually happens due to YouTube's anti-bot measures.")
+            print("\nTry these solutions:\n")
+            print("1. Update yt-dlp to the latest version:")
+            print("   pip install --upgrade yt-dlp")
+            print("\n2. Use browser cookies (RECOMMENDED):")
+            print("   - Install browser extension: 'Get cookies.txt'")
+            print("     Chrome: https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid")
+            print("     Firefox: https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/")
+            print("   - Go to youtube.com and make sure you're logged in")
+            print("   - Click the extension and export cookies")
+            print("   - Save as 'cookies.txt'")
+            print("   - Run: python segment_youtube_video.py URL --cookies cookies.txt")
+            print("\n3. Try a different video (some videos have stricter restrictions)")
+            print("\n4. Wait a few minutes and try again (rate limiting)")
+            print("="*70)
+        raise
 
 
 def transcribe_with_whisperx(audio_path: str, device: str = None,
@@ -311,6 +351,7 @@ Examples:
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --min-duration 10
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --normalize lufs
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --cookies cookies.txt
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --normalize rms --target-level -20.0
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --model large-v2 --device cpu
         """
@@ -348,6 +389,11 @@ Examples:
         help='Keep downloaded audio file'
     )
     parser.add_argument(
+        '--cookies',
+        type=str,
+        help='Path to cookies.txt file (use browser cookies to bypass YouTube restrictions)'
+    )
+    parser.add_argument(
         '--normalize',
         default='none',
         choices=['none', 'lufs', 'rms', 'peak'],
@@ -368,7 +414,7 @@ Examples:
 
     try:
         # Step 1: Download YouTube video
-        audio_path = download_youtube_video(args.url, output_dir="temp_downloads")
+        audio_path = download_youtube_video(args.url, output_dir="temp_downloads", cookies_file=args.cookies)
 
         # Step 2: Transcribe with WhisperX
         result = transcribe_with_whisperx(audio_path, device=args.device, model_name=args.model)
