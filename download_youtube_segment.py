@@ -14,9 +14,24 @@ import os
 import sys
 import subprocess
 import tempfile
+import shutil
 from pathlib import Path
 
 import yt_dlp
+
+
+def check_ffmpeg():
+    """
+    Check if ffmpeg is installed and accessible.
+
+    Returns:
+        bool: True if ffmpeg is available, False otherwise
+    """
+    if shutil.which('ffmpeg') is None:
+        return False
+    if shutil.which('ffprobe') is None:
+        return False
+    return True
 
 
 def parse_time(time_str):
@@ -53,7 +68,7 @@ def parse_time(time_str):
 
 def download_youtube_video(url: str, output_path: str) -> str:
     """
-    Download YouTube video as audio.
+    Download YouTube video as audio in native format (no conversion).
 
     Args:
         url: YouTube video URL
@@ -71,22 +86,26 @@ def download_youtube_video(url: str, output_path: str) -> str:
 
     ydl_opts = {
         'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'wav',
-            'preferredquality': '192',
-        }],
-        'outtmpl': output_path,
+        'outtmpl': output_path + '.%(ext)s',  # Keep original extension
         'quiet': True,
         'no_warnings': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+            info = ydl.extract_info(url, download=True)
 
-        # yt-dlp will add .wav extension
-        audio_path = output_path + '.wav'
+            # Get the actual filename with extension
+            if 'requested_downloads' in info and info['requested_downloads']:
+                audio_path = info['requested_downloads'][0]['filepath']
+            else:
+                # Fallback: try common audio extensions
+                ext = info.get('ext', 'webm')
+                audio_path = f"{output_path}.{ext}"
+
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"Downloaded file not found: {audio_path}")
+
         print(f"✓ Downloaded: {audio_path}")
         return audio_path
     except Exception as e:
@@ -96,11 +115,11 @@ def download_youtube_video(url: str, output_path: str) -> str:
 
 def extract_segment(input_path: str, output_path: str, start_time: float, end_time: float):
     """
-    Extract a segment from audio file using ffmpeg.
+    Extract a segment from audio file and convert to WAV using ffmpeg.
 
     Args:
-        input_path: Path to input audio file
-        output_path: Path to output segment file
+        input_path: Path to input audio file (any format)
+        output_path: Path to output segment file (WAV)
         start_time: Start time in seconds
         end_time: End time in seconds
     """
@@ -111,15 +130,16 @@ def extract_segment(input_path: str, output_path: str, start_time: float, end_ti
 
     print(f"\nExtracting segment from {start_time}s to {end_time}s (duration: {duration}s)")
 
-    # Use ffmpeg to extract the segment
+    # Use ffmpeg to extract the segment and convert to WAV
+    # -ss before -i for faster seeking
     cmd = [
         'ffmpeg',
+        '-ss', str(start_time),  # Seek to start position (before -i for speed)
         '-i', input_path,
-        '-ss', str(start_time),
-        '-t', str(duration),
-        '-acodec', 'pcm_s16le',  # WAV format
-        '-ar', '44100',  # Sample rate
-        '-ac', '2',  # Stereo
+        '-t', str(duration),  # Duration to extract from seek position
+        '-acodec', 'pcm_s16le',  # WAV format (16-bit PCM)
+        '-ar', '44100',  # Sample rate: 44.1kHz
+        '-ac', '2',  # Stereo (or use 1 for mono)
         '-y',  # Overwrite output file
         output_path
     ]
@@ -129,11 +149,18 @@ def extract_segment(input_path: str, output_path: str, start_time: float, end_ti
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=True
+            check=True,
+            text=True
         )
         print(f"✓ Segment saved: {output_path}")
     except subprocess.CalledProcessError as e:
-        print(f"Error extracting segment: {e.stderr.decode()}", file=sys.stderr)
+        print(f"\nError extracting segment with ffmpeg:", file=sys.stderr)
+        print(f"Command: {' '.join(cmd)}", file=sys.stderr)
+        print(f"Error output:\n{e.stderr}", file=sys.stderr)
+        raise
+    except FileNotFoundError:
+        print(f"\nError: ffmpeg command not found!", file=sys.stderr)
+        print(f"Please make sure ffmpeg is installed and in your PATH", file=sys.stderr)
         raise
 
 
@@ -197,6 +224,18 @@ Examples:
     args = parser.parse_args()
 
     try:
+        # Check if ffmpeg is available
+        if not check_ffmpeg():
+            print("\n❌ Error: ffmpeg and ffprobe are required but not found!", file=sys.stderr)
+            print("\nPlease install ffmpeg:", file=sys.stderr)
+            print("  - Windows: Download from https://ffmpeg.org/download.html", file=sys.stderr)
+            print("            Or use: winget install ffmpeg", file=sys.stderr)
+            print("  - macOS:   brew install ffmpeg", file=sys.stderr)
+            print("  - Linux:   sudo apt-get install ffmpeg (Ubuntu/Debian)", file=sys.stderr)
+            print("            Or: sudo yum install ffmpeg (RedHat/CentOS)", file=sys.stderr)
+            print("\nMake sure ffmpeg is in your system PATH after installation.", file=sys.stderr)
+            sys.exit(1)
+
         # Parse times
         start_time = parse_time(args.start)
         end_time = parse_time(args.end)
@@ -209,6 +248,7 @@ Examples:
         with tempfile.NamedTemporaryFile(delete=False, suffix='') as tmp_file:
             temp_path = tmp_file.name
 
+        full_audio_path = None  # Initialize to avoid reference errors
         try:
             # Step 1: Download YouTube video
             full_audio_path = download_youtube_video(args.url, temp_path)
@@ -225,15 +265,19 @@ Examples:
 
         finally:
             # Cleanup temporary file
-            if not args.keep_full:
+            if full_audio_path and not args.keep_full:
                 try:
                     if os.path.exists(full_audio_path):
                         os.remove(full_audio_path)
+                        print(f"\n✓ Cleaned up temporary file")
                 except Exception as e:
                     print(f"Warning: Could not remove temporary file: {e}", file=sys.stderr)
-            else:
+            elif full_audio_path and args.keep_full:
                 print(f"\nFull audio saved: {full_audio_path}")
 
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled by user", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"\n❌ Error: {e}", file=sys.stderr)
         import traceback
