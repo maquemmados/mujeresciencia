@@ -132,12 +132,11 @@ def extract_segment(input_path: str, output_path: str, start_time: float, end_ti
 
     # Use ffmpeg to extract the segment and convert to WAV
     # -ss before -i for faster seeking
-    # -to is used instead of -t for more accuracy
     cmd = [
         'ffmpeg',
         '-ss', str(start_time),  # Seek to start position (before -i for speed)
         '-i', input_path,
-        '-to', str(duration),  # Duration from start
+        '-t', str(duration),  # Duration to extract from seek position
         '-acodec', 'pcm_s16le',  # WAV format (16-bit PCM)
         '-ar', '44100',  # Sample rate: 44.1kHz
         '-ac', '2',  # Stereo (or use 1 for mono)
