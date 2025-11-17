@@ -66,13 +66,14 @@ def parse_time(time_str):
         raise ValueError(f"Invalid time format: {time_str}")
 
 
-def download_youtube_video(url: str, output_path: str) -> str:
+def download_youtube_video(url: str, output_path: str, cookies_file: str = None) -> str:
     """
     Download YouTube video as audio in native format (no conversion).
 
     Args:
         url: YouTube video URL
         output_path: Path to save the audio file (without extension)
+        cookies_file: Optional path to cookies file for authentication
 
     Returns:
         Path to the downloaded audio file
@@ -89,7 +90,19 @@ def download_youtube_video(url: str, output_path: str) -> str:
         'outtmpl': output_path + '.%(ext)s',  # Keep original extension
         'quiet': True,
         'no_warnings': True,
+        # Add headers to avoid 403 errors
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
     }
+
+    # Add cookies if provided
+    if cookies_file and os.path.exists(cookies_file):
+        ydl_opts['cookiefile'] = cookies_file
+        print(f"Using cookies from: {cookies_file}")
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -109,7 +122,23 @@ def download_youtube_video(url: str, output_path: str) -> str:
         print(f"✓ Downloaded: {audio_path}")
         return audio_path
     except Exception as e:
-        print(f"Error downloading video: {e}", file=sys.stderr)
+        error_msg = str(e)
+        print(f"\nError downloading video: {error_msg}", file=sys.stderr)
+
+        # Provide helpful suggestions for common errors
+        if "403" in error_msg or "Forbidden" in error_msg:
+            print("\n⚠️  YouTube is blocking the download (HTTP 403 Forbidden)", file=sys.stderr)
+            print("\nPossible solutions:", file=sys.stderr)
+            print("  1. Update yt-dlp to the latest version:", file=sys.stderr)
+            print("     pip install --upgrade yt-dlp", file=sys.stderr)
+            print("\n  2. If the update doesn't work, try using cookies from your browser:", file=sys.stderr)
+            print("     - Install a browser extension to export cookies (e.g., 'Get cookies.txt')", file=sys.stderr)
+            print("     - Export YouTube cookies to a file (cookies.txt)", file=sys.stderr)
+            print("     - Add --cookies option to use them", file=sys.stderr)
+            print("\n  3. Try a different video to see if it's video-specific", file=sys.stderr)
+        elif "Video unavailable" in error_msg or "Private video" in error_msg:
+            print("\n⚠️  The video may be private, deleted, or region-locked", file=sys.stderr)
+
         raise
 
 
@@ -193,6 +222,9 @@ Examples:
 
   # Extract from 1:30 to 2:15
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 1:30 --end 2:15
+
+  # Use cookies file (if getting 403 errors)
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 16 --end 32 --cookies cookies.txt
         """
     )
 
@@ -219,6 +251,10 @@ Examples:
         '--keep-full',
         action='store_true',
         help='Keep the full downloaded audio file'
+    )
+    parser.add_argument(
+        '--cookies',
+        help='Path to cookies file (for bypassing YouTube restrictions)'
     )
 
     args = parser.parse_args()
@@ -251,7 +287,7 @@ Examples:
         full_audio_path = None  # Initialize to avoid reference errors
         try:
             # Step 1: Download YouTube video
-            full_audio_path = download_youtube_video(args.url, temp_path)
+            full_audio_path = download_youtube_video(args.url, temp_path, args.cookies)
 
             # Step 2: Extract segment
             extract_segment(full_audio_path, args.output, start_time, end_time)
