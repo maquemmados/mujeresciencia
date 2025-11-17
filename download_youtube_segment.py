@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """
-Simple YouTube Video Segment Downloader
+YouTube Video Segment Downloader with Vocal Separation
 
 Downloads a YouTube video and extracts a specific time segment as a WAV audio file.
+Optionally separates vocals from background music using Demucs AI.
 
 Example usage:
+    # Basic segment extraction
     python download_youtube_segment.py https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 0:16 --end 0:32
-    python download_youtube_segment.py https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 16 --end 32 --output my_segment.wav
+
+    # Extract only vocals (remove music)
+    python download_youtube_segment.py https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 0:16 --end 0:32 --vocals-only
+
+    # Extract only music (remove vocals)
+    python download_youtube_segment.py https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 0:16 --end 0:32 --music-only
+
+Requirements:
+    - yt-dlp: pip install yt-dlp
+    - ffmpeg: Must be installed and in PATH
+    - demucs (optional, for vocal separation): pip install demucs
 """
 
 import argparse
@@ -18,6 +30,16 @@ import shutil
 from pathlib import Path
 
 import yt_dlp
+
+# Try to import demucs for vocal separation
+try:
+    import torch
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+    import torchaudio
+    DEMUCS_AVAILABLE = True
+except ImportError:
+    DEMUCS_AVAILABLE = False
 
 
 def check_ffmpeg():
@@ -173,6 +195,80 @@ def extract_segment(input_path: str, output_path: str, start_time: float, end_ti
         raise
 
 
+def separate_audio(input_path: str, output_vocals: str = None, output_music: str = None):
+    """
+    Separate vocals and music using Demucs.
+
+    Args:
+        input_path: Path to input audio file (WAV format recommended)
+        output_vocals: Path to save vocals (if None, vocals won't be saved)
+        output_music: Path to save music/accompaniment (if None, music won't be saved)
+
+    Returns:
+        tuple: (vocals_path, music_path) - paths to saved files (None if not saved)
+    """
+    if not DEMUCS_AVAILABLE:
+        raise ImportError(
+            "Demucs is not installed. Install it with:\n"
+            "  pip install demucs\n\n"
+            "Note: This will also install PyTorch (~2GB) if not already installed."
+        )
+
+    print("\nSeparating vocals from music using Demucs...")
+    print("(This may take a moment, especially on first run when downloading the model)")
+
+    try:
+        # Load the pre-trained model (htdemucs is the latest and best)
+        model = get_model('htdemucs')
+        model.eval()
+
+        # Load audio file
+        wav, sr = torchaudio.load(input_path)
+
+        # Demucs expects stereo audio at 44.1kHz
+        if sr != 44100:
+            resampler = torchaudio.transforms.Resample(sr, 44100)
+            wav = resampler(wav)
+            sr = 44100
+
+        # Ensure stereo
+        if wav.shape[0] == 1:
+            wav = wav.repeat(2, 1)
+        elif wav.shape[0] > 2:
+            wav = wav[:2]
+
+        # Apply the model
+        with torch.no_grad():
+            sources = apply_model(model, wav.unsqueeze(0), device='cpu', split=True, overlap=0.25)[0]
+
+        # Sources order: drums, bass, other, vocals
+        vocals = sources[3]  # Index 3 is vocals
+
+        # Music is everything except vocals (drums + bass + other)
+        music = sources[0] + sources[1] + sources[2]
+
+        # Save vocals if requested
+        vocals_path = None
+        if output_vocals:
+            torchaudio.save(output_vocals, vocals, sr)
+            vocals_path = output_vocals
+            print(f"✓ Vocals saved: {output_vocals}")
+
+        # Save music if requested
+        music_path = None
+        if output_music:
+            torchaudio.save(output_music, music, sr)
+            music_path = output_music
+            print(f"✓ Music saved: {output_music}")
+
+        return vocals_path, music_path
+
+    except Exception as e:
+        print(f"\nError during audio separation:", file=sys.stderr)
+        print(f"  {e}", file=sys.stderr)
+        raise
+
+
 def format_time(seconds: float) -> str:
     """Format seconds as MM:SS or HH:MM:SS string."""
     hours = int(seconds // 3600)
@@ -202,6 +298,17 @@ Examples:
 
   # Extract from 1:30 to 2:15
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 1:30 --end 2:15
+
+  # Extract only vocals (remove background music)
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 0:16 --end 0:32 --vocals-only
+
+  # Extract only background music (remove vocals)
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 0:16 --end 0:32 --music-only
+
+  # Save both vocals and music as separate files
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --start 0:16 --end 0:32 --separate-audio
+
+Note: Vocal separation requires 'demucs' package. Install with: pip install demucs
         """
     )
 
@@ -228,6 +335,24 @@ Examples:
         '--keep-full',
         action='store_true',
         help='Keep the full downloaded audio file'
+    )
+
+    # Audio separation options
+    separation_group = parser.add_mutually_exclusive_group()
+    separation_group.add_argument(
+        '--vocals-only',
+        action='store_true',
+        help='Extract only vocals (remove background music)'
+    )
+    separation_group.add_argument(
+        '--music-only',
+        action='store_true',
+        help='Extract only background music (remove vocals)'
+    )
+    separation_group.add_argument(
+        '--separate-audio',
+        action='store_true',
+        help='Save both vocals and music as separate files'
     )
 
     args = parser.parse_args()
@@ -258,22 +383,68 @@ Examples:
             temp_path = tmp_file.name
 
         full_audio_path = None  # Initialize to avoid reference errors
+        segment_path = None
         try:
             # Step 1: Download YouTube video
             full_audio_path = download_youtube_video(args.url, temp_path)
 
             # Step 2: Extract segment
-            extract_segment(full_audio_path, args.output, start_time, end_time)
+            # If we need to separate audio, extract to a temp file first
+            if args.vocals_only or args.music_only or args.separate_audio:
+                # Create temp file for the mixed segment
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_seg:
+                    segment_path = tmp_seg.name
+                extract_segment(full_audio_path, segment_path, start_time, end_time)
+            else:
+                # Extract directly to output
+                extract_segment(full_audio_path, args.output, start_time, end_time)
+                segment_path = args.output
 
+            # Step 3: Apply audio separation if requested
+            if args.vocals_only or args.music_only or args.separate_audio:
+                # Check if Demucs is available
+                if not DEMUCS_AVAILABLE:
+                    print("\n❌ Error: Demucs is required for vocal separation!", file=sys.stderr)
+                    print("\nPlease install Demucs:", file=sys.stderr)
+                    print("  pip install demucs", file=sys.stderr)
+                    print("\nNote: This will also install PyTorch (~2GB) if not already installed.", file=sys.stderr)
+                    sys.exit(1)
+
+                # Determine output paths
+                if args.vocals_only:
+                    output_vocals = args.output
+                    output_music = None
+                elif args.music_only:
+                    output_vocals = None
+                    output_music = args.output
+                else:  # args.separate_audio
+                    # Generate filenames for vocals and music
+                    base_name = os.path.splitext(args.output)[0]
+                    ext = os.path.splitext(args.output)[1] or '.wav'
+                    output_vocals = f"{base_name}_vocals{ext}"
+                    output_music = f"{base_name}_music{ext}"
+
+                # Perform separation
+                separate_audio(segment_path, output_vocals, output_music)
+
+            # Success message
             print(f"\n{'='*60}")
             print(f"✓ Success!")
-            print(f"  Output: {args.output}")
+            if args.vocals_only:
+                print(f"  Vocals: {args.output}")
+            elif args.music_only:
+                print(f"  Music: {args.output}")
+            elif args.separate_audio:
+                print(f"  Vocals: {output_vocals}")
+                print(f"  Music: {output_music}")
+            else:
+                print(f"  Output: {args.output}")
             print(f"  Segment: {format_time(start_time)} - {format_time(end_time)}")
             print(f"  Duration: {end_time - start_time:.2f}s")
             print(f"{'='*60}")
 
         finally:
-            # Cleanup temporary file
+            # Cleanup temporary files
             if full_audio_path and not args.keep_full:
                 try:
                     if os.path.exists(full_audio_path):
@@ -283,6 +454,14 @@ Examples:
                     print(f"Warning: Could not remove temporary file: {e}", file=sys.stderr)
             elif full_audio_path and args.keep_full:
                 print(f"\nFull audio saved: {full_audio_path}")
+
+            # Clean up temporary segment file (if we created one for separation)
+            if segment_path and segment_path != args.output:
+                try:
+                    if os.path.exists(segment_path):
+                        os.remove(segment_path)
+                except Exception as e:
+                    print(f"Warning: Could not remove temporary segment file: {e}", file=sys.stderr)
 
     except KeyboardInterrupt:
         print("\n\nOperation cancelled by user", file=sys.stderr)
