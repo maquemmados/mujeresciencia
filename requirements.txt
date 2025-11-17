@@ -11,5 +11,9 @@ ffmpeg-python>=0.2.0
 librosa>=0.10.0
 soundfile>=0.12.1
 
+# Audio normalization (for perception studies)
+pyloudnorm>=0.1.1
+numpy>=1.24.0
+
 # Utilities
 tqdm>=4.66.0

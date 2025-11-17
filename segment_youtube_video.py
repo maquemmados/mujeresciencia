@@ -17,6 +17,8 @@ import whisperx
 import torch
 import soundfile as sf
 import librosa
+import numpy as np
+import pyloudnorm as pyln
 from tqdm import tqdm
 
 
@@ -150,18 +152,100 @@ def merge_short_segments(segments: list, min_duration: float = 5.0) -> list:
     return merged
 
 
-def export_audio_segments(audio_path: str, segments: list, output_dir: str = "segments"):
+def normalize_audio(audio: np.ndarray, sample_rate: int, method: str = "lufs",
+                   target_level: float = -23.0) -> np.ndarray:
     """
-    Export audio segments to individual files.
+    Normalize audio for perception studies.
+
+    Args:
+        audio: Audio signal as numpy array
+        sample_rate: Sample rate of the audio
+        method: Normalization method ('lufs', 'rms', 'peak', or 'none')
+        target_level: Target level for normalization
+            - For LUFS: target loudness in LUFS (default: -23.0 LUFS, EBU R128 standard)
+            - For RMS: target RMS level in dB (default: -23.0 dB)
+            - For peak: target peak level in dB (default: -1.0 dB)
+
+    Returns:
+        Normalized audio signal
+    """
+    if method == "none":
+        return audio
+
+    # Ensure audio is float
+    audio = audio.astype(np.float32)
+
+    if method == "lufs":
+        # Loudness normalization using ITU-R BS.1770-4 / EBU R128
+        meter = pyln.Meter(sample_rate)
+        loudness = meter.integrated_loudness(audio)
+
+        # Prevent errors with silent audio
+        if np.isinf(loudness) or loudness < -70:
+            print(f"  Warning: Audio segment is too quiet (loudness: {loudness:.1f} LUFS), skipping normalization")
+            return audio
+
+        # Normalize to target LUFS
+        normalized_audio = pyln.normalize.loudness(audio, loudness, target_level)
+        return normalized_audio
+
+    elif method == "rms":
+        # RMS (Root Mean Square) normalization
+        rms = np.sqrt(np.mean(audio ** 2))
+
+        if rms < 1e-8:
+            print(f"  Warning: Audio segment is silent (RMS: {rms:.2e}), skipping normalization")
+            return audio
+
+        # Convert target dB to linear scale
+        target_rms = 10 ** (target_level / 20.0)
+        gain = target_rms / rms
+
+        # Apply gain with clipping protection
+        normalized_audio = audio * gain
+        max_val = np.abs(normalized_audio).max()
+        if max_val > 1.0:
+            normalized_audio = normalized_audio / max_val * 0.99
+
+        return normalized_audio
+
+    elif method == "peak":
+        # Peak normalization
+        peak = np.abs(audio).max()
+
+        if peak < 1e-8:
+            print(f"  Warning: Audio segment is silent (peak: {peak:.2e}), skipping normalization")
+            return audio
+
+        # Convert target dB to linear scale
+        target_peak = 10 ** (target_level / 20.0)
+        gain = target_peak / peak
+        normalized_audio = audio * gain
+
+        return normalized_audio
+
+    else:
+        raise ValueError(f"Unknown normalization method: {method}")
+
+
+def export_audio_segments(audio_path: str, segments: list, output_dir: str = "segments",
+                         normalize: str = "none", target_level: float = -23.0):
+    """
+    Export audio segments to individual files with optional normalization.
 
     Args:
         audio_path: Path to original audio file
         segments: List of segment dictionaries
         output_dir: Directory to save segment files
+        normalize: Normalization method ('lufs', 'rms', 'peak', or 'none')
+        target_level: Target level for normalization (in dB or LUFS)
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\nExporting {len(segments)} audio segments...")
+    if normalize != "none":
+        print(f"\nExporting {len(segments)} audio segments with {normalize.upper()} normalization (target: {target_level})...")
+    else:
+        print(f"\nExporting {len(segments)} audio segments...")
 
     # Load audio
     audio, sr = librosa.load(audio_path, sr=None)
@@ -181,9 +265,14 @@ def export_audio_segments(audio_path: str, segments: list, output_dir: str = "se
         # Extract segment
         segment_audio = audio[start_sample:end_sample]
 
+        # Apply normalization if requested
+        if normalize != "none":
+            segment_audio = normalize_audio(segment_audio, sr, method=normalize, target_level=target_level)
+
         # Create filename
         speaker_info = f"_speaker{segment['speaker']}" if segment.get('speaker') else ""
-        filename = f"segment_{idx+1:03d}{speaker_info}_{duration:.1f}s.wav"
+        norm_info = f"_norm{normalize}" if normalize != "none" else ""
+        filename = f"segment_{idx+1:03d}{speaker_info}_{duration:.1f}s{norm_info}.wav"
         filepath = os.path.join(output_dir, filename)
 
         # Save audio
@@ -197,7 +286,9 @@ def export_audio_segments(audio_path: str, segments: list, output_dir: str = "se
             'end_time': end_time,
             'duration': duration,
             'text': segment['text'],
-            'speaker': segment.get('speaker')
+            'speaker': segment.get('speaker'),
+            'normalization': normalize if normalize != "none" else None,
+            'target_level': target_level if normalize != "none" else None
         })
 
     # Save metadata as JSON
@@ -207,6 +298,8 @@ def export_audio_segments(audio_path: str, segments: list, output_dir: str = "se
 
     print(f"✓ Segments exported to: {output_dir}")
     print(f"✓ Metadata saved to: {metadata_path}")
+    if normalize != "none":
+        print(f"✓ Audio normalized using {normalize.upper()} method (target: {target_level})")
 
 
 def main():
@@ -217,6 +310,8 @@ def main():
 Examples:
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --min-duration 10
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --normalize lufs
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --normalize rms --target-level -20.0
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --model large-v2 --device cpu
         """
     )
@@ -252,6 +347,22 @@ Examples:
         action='store_true',
         help='Keep downloaded audio file'
     )
+    parser.add_argument(
+        '--normalize',
+        default='none',
+        choices=['none', 'lufs', 'rms', 'peak'],
+        help='Audio normalization method for perception studies (default: none). '
+             'LUFS is recommended for perceptual studies.'
+    )
+    parser.add_argument(
+        '--target-level',
+        type=float,
+        default=-23.0,
+        help='Target normalization level in dB/LUFS (default: -23.0). '
+             'For LUFS: -23.0 is EBU R128 standard. '
+             'For peak: -1.0 to -3.0 is common. '
+             'For RMS: -20.0 to -23.0 is typical.'
+    )
 
     args = parser.parse_args()
 
@@ -269,7 +380,8 @@ Examples:
         print(f"✓ Merged from {len(segments)} to {len(merged_segments)} segments")
 
         # Step 4: Export audio segments
-        export_audio_segments(audio_path, merged_segments, output_dir=args.output_dir)
+        export_audio_segments(audio_path, merged_segments, output_dir=args.output_dir,
+                            normalize=args.normalize, target_level=args.target_level)
 
         # Cleanup
         if not args.keep_audio:
