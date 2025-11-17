@@ -84,12 +84,21 @@ def download_youtube_video(url: str, output_path: str) -> str:
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
+    # Get ffmpeg location to help yt-dlp find it
+    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_location = os.path.dirname(ffmpeg_path) if ffmpeg_path else None
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_path + '.%(ext)s',  # Keep original extension
         'quiet': True,
         'no_warnings': True,
+        'postprocessors': [],  # Disable postprocessors - we handle processing with ffmpeg
     }
+
+    # Explicitly set ffmpeg location if found
+    if ffmpeg_location:
+        ydl_opts['ffmpeg_location'] = ffmpeg_location
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
