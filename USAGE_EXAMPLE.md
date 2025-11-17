@@ -9,13 +9,29 @@ A simple script to download a YouTube video and extract a specific time segment 
 ### Installation
 
 ```bash
-# Install dependencies
+# Install Python dependencies
 pip install -r requirements.txt
+```
 
-# Make sure ffmpeg is installed on your system
-# Ubuntu/Debian: sudo apt-get install ffmpeg
-# macOS: brew install ffmpeg
-# Windows: download from https://ffmpeg.org/
+**Important: Install ffmpeg**
+
+This script requires ffmpeg to be installed on your system:
+
+- **Windows**:
+  - Download from https://ffmpeg.org/download.html
+  - Or use: `winget install ffmpeg`
+  - Add ffmpeg to your system PATH
+- **macOS**:
+  - `brew install ffmpeg`
+- **Linux (Ubuntu/Debian)**:
+  - `sudo apt-get install ffmpeg`
+- **Linux (RedHat/CentOS)**:
+  - `sudo yum install ffmpeg`
+
+To verify ffmpeg is installed correctly:
+```bash
+ffmpeg -version
+ffprobe -version
 ```
 
 ### Usage Examples
