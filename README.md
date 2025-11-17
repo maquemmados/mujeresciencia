@@ -93,6 +93,7 @@ python segment_youtube_video.py [URL] [OPTIONS]
   - For RMS: -20.0 to -23.0 dB is typical
   - For Peak: -1.0 to -3.0 dB is common
 - `--cookies FILE` - Path to cookies.txt file (for bypassing YouTube restrictions)
+- `--hf-token TOKEN` - HuggingFace token for speaker diarization (optional)
 - `--keep-audio` - Keep the downloaded audio file after processing
 
 ### Examples
@@ -120,6 +121,11 @@ python segment_youtube_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --
 **Using cookies to bypass YouTube restrictions:**
 ```bash
 python segment_youtube_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --cookies cookies.txt
+```
+
+**With speaker diarization (detects different speakers):**
+```bash
+python segment_youtube_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --hf-token YOUR_HF_TOKEN
 ```
 
 **Use a different model for faster processing:**
@@ -281,6 +287,49 @@ Audio normalization ensures consistent loudness across all segments, which is cr
 python segment_youtube_video.py "VIDEO_URL" --normalize lufs --target-level -23.0
 ```
 
+## Speaker Diarization
+
+Speaker diarization automatically detects and labels different speakers in the audio. This feature is **optional** and requires a HuggingFace account.
+
+### How to Enable Speaker Diarization
+
+1. **Create a HuggingFace account** (free):
+   - Go to https://huggingface.co/join
+
+2. **Accept the pyannote model terms**:
+   - Visit https://huggingface.co/pyannote/speaker-diarization-3.1
+   - Click "Agree and access repository"
+   - Also accept terms at https://huggingface.co/pyannote/segmentation-3.0
+
+3. **Get your HuggingFace token**:
+   - Go to https://huggingface.co/settings/tokens
+   - Create a new token (read access is sufficient)
+   - Copy the token
+
+4. **Use the token with the script**:
+   ```bash
+   python segment_youtube_video.py "VIDEO_URL" --hf-token YOUR_TOKEN_HERE
+   ```
+
+### Benefits of Speaker Diarization
+
+- Segments are labeled with speaker IDs (e.g., `SPEAKER_00`, `SPEAKER_01`)
+- Filenames include speaker information (e.g., `segment_001_speaker0_8.2s.wav`)
+- Metadata includes speaker labels for each segment
+- Useful for multi-speaker content (interviews, conversations, debates)
+
+### Without Speaker Diarization
+
+If you don't provide a HuggingFace token, the script will:
+- Skip speaker detection
+- Create segments without speaker labels
+- Still work perfectly for segmentation and transcription
+
+**Example with speaker diarization:**
+```bash
+python segment_youtube_video.py "VIDEO_URL" --hf-token hf_xxxxxxxxxxxxx --normalize lufs
+```
+
 ## Performance Notes
 
 - **GPU Recommended**: Processing is significantly faster with a CUDA-compatible GPU
@@ -299,8 +348,24 @@ python segment_youtube_video.py "VIDEO_URL" --normalize lufs --target-level -23.
 - Ensure FFmpeg is in your system PATH
 
 **Issue: Diarization fails**
-- The script will continue without speaker detection
-- Segments will still be created without speaker labels
+
+If speaker diarization fails, the script will continue without speaker detection. Common causes:
+
+1. **No HuggingFace token provided**:
+   - Speaker diarization requires a HuggingFace token
+   - Get one at https://huggingface.co/settings/tokens
+   - Use with `--hf-token YOUR_TOKEN`
+
+2. **Model terms not accepted**:
+   - You must accept the model terms at https://huggingface.co/pyannote/speaker-diarization-3.1
+   - Also accept terms at https://huggingface.co/pyannote/segmentation-3.0
+   - Click "Agree and access repository" on both pages
+
+3. **Invalid or expired token**:
+   - Regenerate your token at https://huggingface.co/settings/tokens
+   - Make sure the token has read access
+
+The script will continue and create segments without speaker labels if diarization fails.
 
 **Issue: HTTP Error 403 (YouTube download blocked)**
 
@@ -356,3 +421,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) for YouTube downloading
 - [OpenAI Whisper](https://github.com/openai/whisper) for the base speech recognition model
 - [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm) for ITU-R BS.1770-4 loudness normalization
+- [pyannote.audio](https://github.com/pyannote/pyannote-audio) for speaker diarization

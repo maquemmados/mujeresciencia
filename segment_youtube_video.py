@@ -98,7 +98,7 @@ def download_youtube_video(url: str, output_dir: str = "downloads", cookies_file
 
 
 def transcribe_with_whisperx(audio_path: str, device: str = None,
-                             model_name: str = "large-v3") -> dict:
+                             model_name: str = "large-v3", hf_token: str = None) -> dict:
     """
     Transcribe audio using WhisperX with the best model.
 
@@ -106,6 +106,7 @@ def transcribe_with_whisperx(audio_path: str, device: str = None,
         audio_path: Path to audio file
         device: Device to use ('cuda' or 'cpu'). Auto-detect if None.
         model_name: WhisperX model name (default: large-v3 - the best model)
+        hf_token: HuggingFace token for speaker diarization (optional)
 
     Returns:
         Dictionary containing transcription results with segments
@@ -131,13 +132,28 @@ def transcribe_with_whisperx(audio_path: str, device: str = None,
     result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
 
     # Diarization (speaker detection) - optional but improves segmentation
-    try:
-        print("Performing speaker diarization...")
-        diarize_model = whisperx.DiarizationPipeline(use_auth_token=None, device=device)
-        diarize_segments = diarize_model(audio)
-        result = whisperx.assign_word_speakers(diarize_segments, result)
-    except Exception as e:
-        print(f"Warning: Diarization failed ({e}). Continuing without speaker info.")
+    if hf_token:
+        try:
+            print("Performing speaker diarization...")
+            # Use the correct pyannote pipeline through whisperx
+            from pyannote.audio import Pipeline
+            diarize_model = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token
+            )
+            if device == "cuda":
+                diarize_model.to(torch.device("cuda"))
+
+            diarize_segments = diarize_model(audio_path)
+            result = whisperx.assign_word_speakers(diarize_segments, result)
+            print("✓ Speaker diarization complete")
+        except Exception as e:
+            print(f"Warning: Diarization failed ({e}). Continuing without speaker info.")
+            print("  Tip: Make sure you have accepted the pyannote model terms at:")
+            print("  https://huggingface.co/pyannote/speaker-diarization-3.1")
+    else:
+        print("Skipping speaker diarization (no HuggingFace token provided)")
+        print("  To enable speaker detection, provide a HuggingFace token with --hf-token")
 
     print(f"✓ Transcription complete. Language: {result.get('language', 'unknown')}")
 
@@ -351,6 +367,7 @@ Examples:
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --min-duration 10
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --normalize lufs
+  %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --hf-token YOUR_HF_TOKEN
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --cookies cookies.txt
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --normalize rms --target-level -20.0
   %(prog)s https://www.youtube.com/watch?v=dQw4w9WgXcQ --model large-v2 --device cpu
@@ -409,6 +426,13 @@ Examples:
              'For peak: -1.0 to -3.0 is common. '
              'For RMS: -20.0 to -23.0 is typical.'
     )
+    parser.add_argument(
+        '--hf-token',
+        type=str,
+        help='HuggingFace token for speaker diarization (optional). '
+             'Get your token at https://huggingface.co/settings/tokens. '
+             'You must also accept model terms at https://huggingface.co/pyannote/speaker-diarization-3.1'
+    )
 
     args = parser.parse_args()
 
@@ -417,7 +441,7 @@ Examples:
         audio_path = download_youtube_video(args.url, output_dir="temp_downloads", cookies_file=args.cookies)
 
         # Step 2: Transcribe with WhisperX
-        result = transcribe_with_whisperx(audio_path, device=args.device, model_name=args.model)
+        result = transcribe_with_whisperx(audio_path, device=args.device, model_name=args.model, hf_token=args.hf_token)
 
         # Step 3: Merge short segments
         print(f"\nMerging segments (min duration: {args.min_duration}s)...")
